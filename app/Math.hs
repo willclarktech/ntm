@@ -3,6 +3,8 @@ module Math where
 import Data.Bifunctor (bimap)
 import Data.List (elemIndex)
 import Foreign (fromBool)
+import System.Random (Random (randomRs), StdGen)
+import Utils (chunksOf)
 
 -- Elementwise vector math
 instance (Num a) => Num [a] where
@@ -18,11 +20,21 @@ type Vector = [Double]
 
 type Matrix = [Vector]
 
+-- Initialisation
+
 zeroVector :: Int -> Vector
 zeroVector l = replicate l 0.0
 
 zeroMatrix :: Int -> Int -> Matrix
 zeroMatrix l n = replicate n $ zeroVector l
+
+initVector :: StdGen -> Int -> Vector
+initVector gen length = take length $ randomRs (-0.1, 0.1) gen
+
+initMatrix :: StdGen -> Int -> Int -> Matrix
+initMatrix gen width height = chunksOf width $ initVector gen (width * height)
+
+-- Transformation
 
 oneHotEncode :: Int -> Int -> Vector
 oneHotEncode size v
@@ -33,6 +45,8 @@ oneHotDecode :: Vector -> Int
 oneHotDecode v = case elemIndex 1.0 v of
   Just idx -> idx
   Nothing -> error "Invalid one-hot encoded vector"
+
+-- Vector math
 
 argMax :: Vector -> Int
 argMax v =
@@ -76,6 +90,8 @@ logSoftmax v =
       expValues = map (exp . subtract maxValue) v
       expSum = sum expValues
    in map (\x -> log x - log expSum) expValues
+
+-- Loss functions
 
 crossEntropyLoss :: Vector -> Vector -> Double
 crossEntropyLoss target output =

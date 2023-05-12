@@ -1,8 +1,6 @@
 module Utils where
 
-import Math (Matrix, Vector)
-
-chunksOf :: Int -> Vector -> Matrix
+chunksOf :: Int -> [a] -> [[a]]
 chunksOf width =
   foldr
     ( \value (h : t) ->

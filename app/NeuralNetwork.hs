@@ -1,8 +1,9 @@
 module NeuralNetwork where
 
 import Data.List (transpose)
-import Math (Matrix, Vector, multiply, outerProduct, zeroVector)
+import Math (Matrix, Vector, initMatrix, initVector, multiply, outerProduct, zeroMatrix, zeroVector)
 import Parameter (Parameter (Parameter, gradient, value))
+import System.Random (RandomGen (split), StdGen)
 
 data Layer
   = InputLayer
@@ -24,6 +25,45 @@ newtype NeuralNetwork = NeuralNetwork
   }
   deriving (Show)
 
+-- Initialisation
+
+initRecurrentLayer :: StdGen -> Int -> Int -> Layer
+initRecurrentLayer gen inputWidth outputWidth =
+  let (gen1, gen2) = split gen
+      w = initMatrix gen1 outputWidth (inputWidth + outputWidth)
+      wGrad = zeroMatrix outputWidth (inputWidth + outputWidth)
+      b = initVector gen2 outputWidth
+      i = zeroVector inputWidth
+      o = zeroVector outputWidth
+   in --  in RecurrentLayer weights biases i o (zeroMatrix outputWidth (inputWidth + outputWidth)) o o
+      RecurrentLayer
+        { input = i,
+          weights = Parameter w wGrad,
+          biases = Parameter b o,
+          output = Parameter o o
+        }
+
+initNeuralNetwork :: StdGen -> Int -> Int -> NeuralNetwork
+initNeuralNetwork gen l n =
+  let -- key vector + shift vector
+      readHeadInputWidth = l + n
+      -- read head input + erase vector + add vector
+      writeHeadInputWidth = readHeadInputWidth + (2 * l)
+      -- read head output + sequence element
+      inputWidth = 2 * l
+      -- read head + write head + sequence element
+      outputWidth = readHeadInputWidth + writeHeadInputWidth + l
+      recurrentLayer = initRecurrentLayer gen inputWidth outputWidth
+   in -- activationLayer = initActivationLayer l tanh
+      NeuralNetwork
+        { layers =
+            [ recurrentLayer
+            -- , activationLayer
+            ]
+        }
+
+-- Data flow
+
 applyLayer :: Layer -> Layer -> Layer
 applyLayer previousLayer layer =
   let (Parameter input _) = output previousLayer
@@ -33,7 +73,7 @@ applyLayer previousLayer layer =
             biases,
             output = previousOutput
           } ->
-            let output = value biases + multiply (input <> value previousOutput) (value weights)
+            let output = value biases + multiply (input ++ value previousOutput) (value weights)
              in layer {input, output = Parameter output (zeroVector $ length output)}
         _ -> error "Not implemented"
    in nextLayer
