@@ -1,5 +1,8 @@
 module Utils where
 
+import Control.Monad (join)
+import Data.Bifunctor (bimap)
+
 chunksOf :: Int -> [a] -> [[a]]
 chunksOf width =
   foldr
@@ -9,3 +12,6 @@ chunksOf width =
           else (value : h) : t
     )
     [[]]
+
+mapPair :: (a -> b) -> (a, a) -> (b, b)
+mapPair = join bimap

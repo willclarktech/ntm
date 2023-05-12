@@ -3,9 +3,8 @@ module Ntm where
 import Data.Char (intToDigit)
 import Data.List (transpose)
 import Data.Tuple (swap)
-import Debug.Trace (trace)
 import Math (Matrix, Vector, argMax, complement, cosineSimilarity, crossEntropyLossSequence, dotProduct, initMatrix, initVector, multiply, outerProduct, softmax, zeroMatrix, zeroVector)
-import Memory (ReadHead (ReadHead, addressingWeights, blending, keyVector, readOutput, sharpening, shiftVector), ReadHeadInput, WriteHead (WriteHead, addVector, eraseVector, writeReadHead), WriteHeadInput, initReadHead, initWriteHead, parseReadHeadInput, parseWriteHeadInput, prepareWriteHead, propagateForwardReadHead, writeOp)
+import Memory (ReadHead (ReadHead, addressingWeights, blending, keyVector, readOutput, sharpening, shiftVector), ReadHeadInput, WriteHead (WriteHead, addVector, eraseVector, writeReadHead), WriteHeadInput, initReadHead, initWriteHead, parseReadHeadInput, parseWriteHeadInput, propagateForwardReadHead, propagateForwardWriteHead, writeOp)
 import NeuralNetwork (Layer (RecurrentLayer, biases, input, output, weights), NeuralNetwork (NeuralNetwork, layers), initNeuralNetwork, propagateBackward, propagateForward)
 import Parameter (Parameter (Parameter, value))
 import System.Random (StdGen, randomRs, split)
@@ -70,8 +69,7 @@ forwardPass (Ntm controller memoryMatrix readHead writeHead) input =
       newController = propagateForward controller controllerInput
       (ControllerOutput readHeadInput writeHeadInput networkOutput) = parseControllerOutput l n newController
       newReadHead = propagateForwardReadHead readHead memoryMatrix readHeadInput
-      newWriteHead = prepareWriteHead writeHead memoryMatrix writeHeadInput
-      newMemoryMatrix = writeOp newWriteHead memoryMatrix
+      (newWriteHead, newMemoryMatrix) = propagateForwardWriteHead writeHead memoryMatrix writeHeadInput
    in Ntm
         { controller = newController,
           memoryMatrix = newMemoryMatrix,

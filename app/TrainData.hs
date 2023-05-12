@@ -1,8 +1,8 @@
 module TrainData where
 
-import Data.Bifunctor (Bifunctor (bimap))
 import Data.Char (intToDigit)
 import Math (Matrix, oneHotDecode, oneHotEncode)
+import Utils (mapPair)
 
 -- Each input is a binary sequence (max length 8) ending in a (same-length) sequence of no-op values
 -- Each output is the input sequence preceded by a (same-length) seqence of no-op values
@@ -150,4 +150,4 @@ trainData =
 trainExample2String :: (Matrix, Matrix) -> (String, String)
 trainExample2String example =
   let f = map (intToDigit . oneHotDecode)
-   in bimap f f example
+   in mapPair f example
