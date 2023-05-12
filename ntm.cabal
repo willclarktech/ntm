@@ -1,0 +1,30 @@
+cabal-version:      2.4
+name:               ntm
+version:            0.0.0.0
+synopsis: A pure Haskell implementation of an NTM with BPTT
+-- description:
+-- bug-reports:
+-- license:
+author:             willclarktech
+maintainer:         willclarktech@users.noreply.github.com
+-- copyright:
+-- category:
+extra-source-files: CHANGELOG.md
+
+executable ntm
+    main-is:          Main.hs
+    other-modules:
+        Math
+        Memory
+        NeuralNetwork
+        Ntm
+        Parameter
+        TrainData
+        Utils
+    default-extensions:
+        NamedFieldPuns
+    build-depends:
+        base ^>=4.16.4.0,
+        random ^>= 1.2.1.1
+    hs-source-dirs:   app
+    default-language: Haskell2010
