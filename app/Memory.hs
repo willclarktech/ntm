@@ -4,7 +4,7 @@ import Control.Monad (join)
 import Data.Bifunctor (bimap)
 import Data.List (transpose)
 import Data.Tuple (swap)
-import Math (Matrix, Vector, complement, cosineSimilarity, cosineSimilarity', dotProduct, initVector, multiply, softmax, softmax', zeroMatrix, zeroVector)
+import Math (Matrix, Vector, complement, cosineSimilarity, cosineSimilarity', dotProduct, initVector, multiply, multiplyMatrices, softmax, softmax', zeroMatrix, zeroVector)
 import Parameter (Parameter (Parameter, gradient, value))
 import System.Random (RandomGen (split), StdGen)
 import Utils (mapPair)
@@ -13,7 +13,8 @@ data ReadHeadInternal = ReadHeadInternal
   { contentInput :: (Matrix, Vector),
     interpolationInput :: (Double, Vector, Vector),
     shiftInput :: (Vector, Vector),
-    focusInput :: (Double, Vector)
+    focusInput :: (Double, Vector),
+    readOpInput :: Matrix
   }
   deriving (Show)
 
@@ -34,15 +35,21 @@ data ReadHeadInput = ReadHeadInput
   }
   deriving (Show)
 
+newtype WriteHeadInternal = WriteHeadInternal
+  { memoryMatrixInput :: Matrix
+  }
+  deriving (Show)
+
 data WriteHead = WriteHead
-  { writeReadHead :: ReadHead,
-    eraseVector :: Vector,
-    addVector :: Vector
+  { readHeadW :: ReadHead,
+    eraseVector :: Parameter Vector,
+    addVector :: Parameter Vector,
+    writeHeadInternal :: WriteHeadInternal
   }
   deriving (Show)
 
 data WriteHeadInput = WriteHeadInput
-  { parsedHeadData :: ReadHeadInput,
+  { parsedReadHeadInput :: ReadHeadInput,
     parsedEraseVector :: Vector,
     parsedAddVector :: Vector
   }
@@ -56,6 +63,19 @@ initBlending = 0.5
 initSharpening :: Double
 initSharpening = 1.5
 
+initReadHeadInternal :: Int -> Int -> ReadHeadInternal
+initReadHeadInternal l n =
+  let zN = zeroVector n
+      zL = zeroVector l
+      zM = zeroMatrix l n
+   in ReadHeadInternal
+        { contentInput = (zeroMatrix l n, zL),
+          interpolationInput = (0, zN, zN),
+          shiftInput = (zN, zN),
+          focusInput = (0, zN),
+          readOpInput = zM
+        }
+
 initReadHead :: StdGen -> Int -> Int -> ReadHead
 initReadHead gen l n =
   let (gen1, gen2) = split gen
@@ -68,23 +88,24 @@ initReadHead gen l n =
           blending = Parameter initBlending 0,
           sharpening = Parameter initSharpening 0,
           readOutput = Parameter zL zL,
-          readHeadInternal =
-            ReadHeadInternal
-              { contentInput = (zeroMatrix l n, zL),
-                interpolationInput = (0, zN, zN),
-                shiftInput = (zN, zN),
-                focusInput = (0, zN)
-              }
+          readHeadInternal = initReadHeadInternal l n
         }
 
 initWriteHead :: StdGen -> Int -> Int -> WriteHead
 initWriteHead gen l n =
   let (gen1, gen') = split gen
       (gen2, gen3) = split gen'
+      zL = zeroVector l
+      zN = zeroVector n
+      zM = zeroMatrix l n
    in WriteHead
-        { writeReadHead = initReadHead gen1 l n,
-          eraseVector = initVector gen2 l,
-          addVector = initVector gen3 l
+        { readHeadW = initReadHead gen1 l n,
+          eraseVector = Parameter (initVector gen2 l) zL,
+          addVector = Parameter (initVector gen3 l) zL,
+          writeHeadInternal =
+            WriteHeadInternal
+              { memoryMatrixInput = zM
+              }
         }
 
 -- Parsing
@@ -101,14 +122,14 @@ parseWriteHeadInput :: Int -> Int -> Vector -> WriteHeadInput
 parseWriteHeadInput l n input =
   let (readHead, input') = splitAt (l + n) input
       (eraseVector, addVector) = splitAt l input'
-      parsedHeadData = parseReadHeadInput l readHead
+      parsedReadHeadInput = parseReadHeadInput l readHead
    in WriteHeadInput
-        { parsedHeadData = parsedHeadData,
+        { parsedReadHeadInput = parsedReadHeadInput,
           parsedEraseVector = eraseVector,
           parsedAddVector = addVector
         }
 
--- Addressing
+-- Reading
 
 contentAddressing :: Matrix -> Vector -> Vector
 contentAddressing memoryMatrix keyVector = softmax $ map (cosineSimilarity keyVector) memoryMatrix
@@ -122,12 +143,11 @@ contentAddressing' (m, v) =
 interpolate :: Double -> Vector -> Vector -> Vector
 interpolate g = zipWith (\c l -> (c * g) + (l * (1 - g)))
 
-interpolate' :: (Double, Vector, Vector) -> (Double, Vector, Vector)
+interpolate' :: (Double, Vector, Vector) -> (Double, Vector)
 interpolate' (g, c, l) =
   let dIdG = sum $ zipWith (-) c l
       dIdC = replicate (length c) g
-      dIdL = replicate (length l) (1 - g)
-   in (dIdG, dIdC, dIdL)
+   in (dIdG, dIdC)
 
 cycleForward :: Vector -> Int -> Vector
 cycleForward vector n = uncurry (++) $ swap $ splitAt n vector
@@ -174,18 +194,8 @@ focus' (gamma, addressingWeights) =
       dFdG = zipWith (*) raised $ map log addressingWeights
    in (sum dFdG, dFdA)
 
--- Data flow
-
 readOp :: ReadHead -> Matrix -> Vector
 readOp readHead = multiply (value $ addressingWeights readHead)
-
-writeOp :: WriteHead -> Matrix -> Matrix
-writeOp (WriteHead readHead eraseVector addVector) memoryMatrix =
-  let addressVector = value $ addressingWeights readHead
-      eraseComplements = map (\w -> complement $ map (* w) eraseVector) addressVector
-      erased = zipWith (zipWith (*)) memoryMatrix eraseComplements
-      weightedAddVectors = map (\w -> map (* w) addVector) addressVector
-   in zipWith (+) erased weightedAddVectors
 
 propagateForwardReadHead :: ReadHead -> Matrix -> ReadHeadInput -> ReadHead
 propagateForwardReadHead readHead@(ReadHead {addressingWeights, blending, sharpening}) memoryMatrix (ReadHeadInput newKeyVector newShiftVector) =
@@ -203,7 +213,8 @@ propagateForwardReadHead readHead@(ReadHead {addressingWeights, blending, sharpe
                 { contentInput = (memoryMatrix, newKeyVector),
                   interpolationInput = (value blending, contentWeights, value addressingWeights),
                   shiftInput = (interpolated, newShiftVector),
-                  focusInput = (value sharpening, shifted)
+                  focusInput = (value sharpening, shifted),
+                  readOpInput = memoryMatrix
                 }
           }
       newReadOutput = readOp newReadHead memoryMatrix
@@ -211,30 +222,68 @@ propagateForwardReadHead readHead@(ReadHead {addressingWeights, blending, sharpe
         { readOutput = Parameter newReadOutput (zeroVector (length newReadOutput))
         }
 
-propagateForwardWriteHead :: WriteHead -> Matrix -> WriteHeadInput -> (WriteHead, Matrix)
-propagateForwardWriteHead (WriteHead readHead _ _) memoryMatrix (WriteHeadInput readHeadInput newEraseVector newAddVector) =
-  let newReadHead = propagateForwardReadHead readHead memoryMatrix readHeadInput
-      newWriteHead =
-        WriteHead
-          { writeReadHead = newReadHead,
-            eraseVector = newEraseVector,
-            addVector = newAddVector
-          }
-      newMemoryMatrix = writeOp newWriteHead memoryMatrix
-   in (newWriteHead, newMemoryMatrix)
-
-propagateBackwardReadHead :: ReadHead -> Matrix -> Vector -> ReadHead
-propagateBackwardReadHead readHead@(ReadHead addressingWeights keyVector shiftVector blending sharpening readOutput internalInputs) memoryMatrix outputGrads =
-  let fGrads = multiply outputGrads (transpose memoryMatrix)
-      (gGrad, sGrads) = bimap (\n -> sum $ map (* n) fGrads) (* fGrads) $ focus' (focusInput internalInputs)
-      (iGrads, svGrads) = mapPair (zipWith (*) sGrads) $ shift' (shiftInput internalInputs)
-      (gammaGrad, cGrads, aGrads) = (\(x, y, z) -> (sum $ map (* x) iGrads, zipWith (*) iGrads y, zipWith (*) iGrads z)) $ interpolate' (interpolationInput internalInputs)
-      kGrads = zipWith (*) cGrads $ contentAddressing' (contentInput internalInputs)
+propagateBackwardReadHead :: ReadHead -> Vector -> ReadHead
+propagateBackwardReadHead readHead@(ReadHead {addressingWeights, keyVector, shiftVector, blending, sharpening, readOutput, readHeadInternal}) outputGrads =
+  let fGrads = multiply outputGrads (transpose $ readOpInput readHeadInternal)
+      (gGrad, sGrads) = bimap (\n -> sum $ map (* n) fGrads) (* fGrads) $ focus' (focusInput readHeadInternal)
+      (iGrads, svGrads) = mapPair (zipWith (*) sGrads) $ shift' (shiftInput readHeadInternal)
+      (gammaGrad, cGrads) = (\(x, y) -> (sum $ map (* x) iGrads, zipWith (*) iGrads y)) $ interpolate' (interpolationInput readHeadInternal)
+      kGrads = zipWith (*) cGrads $ contentAddressing' (contentInput readHeadInternal)
    in readHead
-        { addressingWeights = addressingWeights {gradient = gradient addressingWeights + aGrads},
+        { addressingWeights = addressingWeights {gradient = gradient addressingWeights + fGrads},
           keyVector = keyVector {gradient = gradient keyVector + kGrads},
           shiftVector = shiftVector {gradient = gradient shiftVector + svGrads},
           blending = blending {gradient = gradient blending + gammaGrad},
           sharpening = sharpening {gradient = gradient sharpening + gGrad},
           readOutput = readOutput {gradient = gradient readOutput + outputGrads}
+        }
+
+-- Writing
+
+erase :: Matrix -> Vector -> Vector -> Matrix
+erase memoryMatrix addressVector eraseVector =
+  let eraseComplements = map (\w -> complement $ map (* w) eraseVector) addressVector
+   in zipWith (zipWith (*)) memoryMatrix eraseComplements
+
+add :: Matrix -> Vector -> Vector -> Matrix
+add memoryMatrix addressVector addVector =
+  let weightedAddVectors = map (\w -> map (* w) addVector) addressVector
+   in zipWith (+) memoryMatrix weightedAddVectors
+
+writeOp :: WriteHead -> Matrix -> (Matrix, WriteHeadInternal)
+writeOp (WriteHead {readHeadW, eraseVector, addVector}) memoryMatrix =
+  let addressVector = value $ addressingWeights readHeadW
+      erased = erase memoryMatrix addressVector (value eraseVector)
+      newMemoryMatrix = add erased addressVector (value addVector)
+      writeHeadInternal =
+        WriteHeadInternal
+          { memoryMatrixInput = memoryMatrix
+          }
+   in (newMemoryMatrix, writeHeadInternal)
+
+propagateForwardWriteHead :: WriteHead -> Matrix -> WriteHeadInput -> (WriteHead, Matrix)
+propagateForwardWriteHead writeHead@(WriteHead {readHeadW}) memoryMatrix (WriteHeadInput readHeadInput newEraseVector newAddVector) =
+  let newReadHead = propagateForwardReadHead readHeadW memoryMatrix readHeadInput
+      newWriteHead =
+        writeHead
+          { readHeadW = newReadHead,
+            eraseVector = Parameter newEraseVector (zeroVector $ length newEraseVector),
+            addVector = Parameter newAddVector (zeroVector $ length newAddVector)
+          }
+      (newMemoryMatrix, newWriteHeadInternal) = writeOp newWriteHead memoryMatrix
+   in (newWriteHead {writeHeadInternal = newWriteHeadInternal}, newMemoryMatrix)
+
+propagateBackwardWriteHead :: WriteHead -> Matrix -> WriteHead
+propagateBackwardWriteHead writeHead@(WriteHead {readHeadW, eraseVector, addVector, writeHeadInternal = (WriteHeadInternal {memoryMatrixInput})}) outputGrads =
+  let addressVector = value $ addressingWeights readHeadW
+      addVectorGrads = multiply addressVector $ transpose outputGrads
+      aGrad1 = multiply (value addVector) outputGrads
+      eraseGrads = multiplyMatrices (transpose memoryMatrixInput) outputGrads
+      eraseVectorGrads = multiply (complement addressVector) $ transpose eraseGrads
+      aGrad2 = multiply (complement $ value eraseVector) eraseGrads
+      newReadHead = propagateBackwardReadHead readHeadW (aGrad1 + aGrad2)
+   in writeHead
+        { readHeadW = newReadHead,
+          eraseVector = eraseVector {gradient = gradient eraseVector + eraseVectorGrads},
+          addVector = addVector {gradient = gradient addVector + addVectorGrads}
         }

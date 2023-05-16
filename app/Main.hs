@@ -1,7 +1,30 @@
-import Math (crossEntropyLossSequence)
-import Ntm (ControllerOutput (networkOutput), Ntm (controller), forwardPassSequence, initNtm, ntms2String, parseControllerOutput)
+import Control.Monad (forM_)
+import Data.Foldable (Foldable (foldl'))
+import Math (Matrix, crossEntropyLossSequence)
+import Ntm (ControllerOutput (networkOutput), Ntm (controller), forwardPass, forwardPassSequence, initNtm, ntms2String, parseControllerOutput)
 import System.Random (mkStdGen)
 import TrainData (trainData, trainExample2String)
+
+-- train :: Ntm -> [(Matrix, Matrix)] -> Int -> Float -> IO ()
+-- train ntm trainData numEpochs learningRate = do
+--   forM_ [1 .. numEpochs] $ \epoch -> do
+--     putStrLn $ "Epoch " ++ show epoch
+--     let ntm' = foldl' trainOnSample ntm trainData
+--     -- putStrLn $ "Loss: " ++ (show $ totalLoss ntm' trainData)
+--     print ntm'
+--     return ()
+--   where
+--     trainOnSample :: Ntm -> (Matrix, Matrix) -> Ntm
+--     trainOnSample ntm (inputSequence, targetSequence) =
+--       let ntms = forwardPassSequence ntm inputSequence
+--           outputSequence = map (networkOutput . parseControllerOutput 3 8 . controller) ntms
+--           loss = crossEntropyLossSequence targetSequence outputSequence
+--           outputGrad = outputSequence - targetSequence
+--           ntm'' = foldr backwardPass ntm' outputGrad
+--        in updateParametersNtm ntm'' learningRate
+
+-- totalLoss :: Ntm -> [(Matrix, Matrix)] -> Float
+-- totalLoss ntm trainData = -- Compute
 
 main :: IO ()
 main = do

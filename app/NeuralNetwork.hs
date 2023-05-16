@@ -10,7 +10,7 @@ data Layer
       { output :: Parameter Vector
       }
   | RecurrentLayer
-      { input :: Vector,
+      { input :: Parameter Vector,
         weights :: Parameter Matrix,
         biases :: Parameter Vector,
         output :: Parameter Vector
@@ -18,7 +18,7 @@ data Layer
 
 instance Show Layer where
   show (InputLayer output) = "InputLayer (" ++ show (length (value output)) ++ ")"
-  show (RecurrentLayer {input, output}) = "RecurrentLayer (" ++ show (length input) ++ "->" ++ show (length (value output)) ++ ")"
+  show (RecurrentLayer {input, output}) = "RecurrentLayer (" ++ show (length (value input)) ++ "->" ++ show (length (value output)) ++ ")"
 
 newtype NeuralNetwork = NeuralNetwork
   { layers :: [Layer]
@@ -35,9 +35,8 @@ initRecurrentLayer gen inputWidth outputWidth =
       b = initVector gen2 outputWidth
       i = zeroVector inputWidth
       o = zeroVector outputWidth
-   in --  in RecurrentLayer weights biases i o (zeroMatrix outputWidth (inputWidth + outputWidth)) o o
-      RecurrentLayer
-        { input = i,
+   in RecurrentLayer
+        { input = Parameter i i,
           weights = Parameter w wGrad,
           biases = Parameter b o,
           output = Parameter o o
@@ -54,11 +53,9 @@ initNeuralNetwork gen l n =
       -- read head + write head + sequence element
       outputWidth = readHeadInputWidth + writeHeadInputWidth + l
       recurrentLayer = initRecurrentLayer gen inputWidth outputWidth
-   in -- activationLayer = initActivationLayer l tanh
-      NeuralNetwork
+   in NeuralNetwork
         { layers =
             [ recurrentLayer
-            -- , activationLayer
             ]
         }
 
@@ -66,15 +63,18 @@ initNeuralNetwork gen l n =
 
 applyLayer :: Layer -> Layer -> Layer
 applyLayer previousLayer layer =
-  let (Parameter input _) = output previousLayer
+  let (Parameter inp _) = output previousLayer
       nextLayer = case layer of
         RecurrentLayer
           { weights,
             biases,
             output = previousOutput
           } ->
-            let output = value biases + multiply (input ++ value previousOutput) (value weights)
-             in layer {input, output = Parameter output (zeroVector $ length output)}
+            let output = value biases + multiply (inp ++ value previousOutput) (value weights)
+             in layer
+                  { input = Parameter inp (zeroVector $ length inp),
+                    output = Parameter output (zeroVector $ length output)
+                  }
         _ -> error "Not implemented"
    in nextLayer
 
@@ -83,31 +83,30 @@ propagateForward (NeuralNetwork layers) input =
   let newLayers = foldl (\newLayers nextlayer -> newLayers ++ [applyLayer (last newLayers) nextlayer]) [InputLayer (Parameter input (zeroVector (length input)))] layers
    in NeuralNetwork $ tail newLayers
 
-calculateLayerGrads :: Layer -> Vector -> (Layer, Vector)
+calculateLayerGrads :: Layer -> Vector -> Layer
 calculateLayerGrads layer newOGrad = case layer of
   (RecurrentLayer {input, weights, biases, output}) ->
-    let newWGrad = outerProduct newOGrad input
+    let newWGrad = outerProduct newOGrad (value input)
         newBGrad = newOGrad
-        newLayer =
-          layer
-            { weights = weights {gradient = zipWith (+) (gradient weights) newWGrad},
-              biases = biases {gradient = gradient biases + newBGrad},
-              output = output {gradient = gradient output + newOGrad}
-            }
-        inputGrads = multiply newOGrad $ transpose $ value weights
-     in (newLayer, inputGrads)
+        newIGrad = multiply newOGrad $ transpose $ value weights
+     in layer
+          { input = input {gradient = gradient input + newIGrad},
+            weights = weights {gradient = zipWith (+) (gradient weights) newWGrad},
+            biases = biases {gradient = gradient biases + newBGrad},
+            output = output {gradient = gradient output + newOGrad}
+          }
   _ -> error "Not implemented"
 
-propagateBackward :: NeuralNetwork -> Vector -> NeuralNetwork
-propagateBackward (NeuralNetwork layers) target =
+propagateBackwardNeuralNetwork :: NeuralNetwork -> Vector -> NeuralNetwork
+propagateBackwardNeuralNetwork (NeuralNetwork layers) target =
   -- TODO: Generalize beyond cross entropy loss
   let outputGrad = value (output (last layers)) - target
-      (updatedLayers, _) =
+      updatedLayers =
         foldr
-          ( \layer (layersWithGrad, grad) ->
-              let (layerWithGrad, newGrad) = calculateLayerGrads layer grad
-               in (layerWithGrad : layersWithGrad, newGrad)
+          ( \layer layersWithGrad ->
+              let layerWithGrad = calculateLayerGrads layer (gradient $ input $ head layersWithGrad)
+               in layerWithGrad : layersWithGrad
           )
-          ([], outputGrad)
+          []
           layers
    in NeuralNetwork updatedLayers
